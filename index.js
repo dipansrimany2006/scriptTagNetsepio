@@ -10,6 +10,9 @@
     placeholder: "Type your message...",
     buttonIcon: "💬",
     theme: "light",
+    voiceModel: "af_bella", // Default voice model
+    ttsApiUrl: "https://kokoro.cyreneai.com", // Default TTS API URL
+    enableVoice: true, // Enable voice features by default
   };
 
   // Merge user config with defaults
@@ -23,486 +26,659 @@
     "top-left": "top: 20px; left: 20px;",
   };
 
-  // Here we fetch the chat with agent api
+  // API endpoints
   const agentChatUrl = config.chatUrl;
-
-  // Here we fetch the agnet information api
   const agentInfoUrl = config.agentInfoUrl;
+  const ttsApiUrl = config.ttsApiUrl;
+
   let agentInfo;
   async function loadAgentInfo() {
     try {
-      const response = await fetch(agentInfoUrl);
-      agentInfo = await response.json();
+      if (agentInfoUrl) {
+        const response = await fetch(agentInfoUrl);
+        agentInfo = await response.json();
+      }
     } catch (error) {
       console.error("Error fetching agent info:", error);
     }
   }
   loadAgentInfo();
 
+  // Voice Manager
+  class VoiceManager {
+    constructor() {
+      this.recognition = this.initSpeechRecognition();
+      this.isListening = false;
+    }
+
+    initSpeechRecognition() {
+      if (typeof window !== "undefined") {
+        const SpeechRecognition =
+          window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+          const recognition = new SpeechRecognition();
+          recognition.continuous = false;
+          recognition.interimResults = false;
+          return recognition;
+        }
+      }
+      return null;
+    }
+
+    startListening(onResult, onEnd) {
+      if (!this.recognition) {
+        console.error("Speech recognition not supported");
+        return;
+      }
+
+      if (this.isListening) return;
+
+      this.isListening = true;
+
+      this.recognition.onresult = (event) => {
+        const text = event.results[0][0].transcript;
+        onResult(text);
+      };
+
+      this.recognition.onend = () => {
+        this.isListening = false;
+        onEnd();
+      };
+
+      this.recognition.start();
+    }
+
+    stopListening() {
+      if (!this.recognition || !this.isListening) return;
+      this.recognition.stop();
+      this.isListening = false;
+    }
+
+    async generateVoice(text, voiceModel) {
+      try {
+        const response = await fetch(`${ttsApiUrl}/v1/audio/speech`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "kokoro",
+            input: text,
+            voice: voiceModel || config.voiceModel,
+            response_format: "mp3",
+            speed: 1,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to generate voice");
+        }
+
+        const audioBlob = await response.blob();
+        return URL.createObjectURL(audioBlob);
+      } catch (error) {
+        console.error("Error generating voice:", error);
+        return null;
+      }
+    }
+  }
+
+  const voiceManager = new VoiceManager();
+
   // Inject CSS
   const style = document.createElement("style");
   style.textContent = `
-        /* Widget Container */
-        #agent-widget {
-            position: fixed;
-            ${positions[config.position]}
-            z-index: 10000;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
+    /* Widget Container */
+    #agent-widget {
+        position: fixed;
+        ${positions[config.position]}
+        z-index: 10000;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
 
-        /* Chat Button */
-        #agent-button {
-            width: 60px;
-            height: 60px;
-            border-radius: 50%;
-            background: ${config.primaryColor};
-            border: none;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-size: 24px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            position: relative;
-            overflow: hidden;
-        }
+    /* Chat Button */
+    #agent-button {
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        background: ${config.primaryColor};
+        border: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 24px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        position: relative;
+        overflow: hidden;
+    }
 
-        #agent-button:hover {
-            transform: scale(1.05);
-            box-shadow: 0 6px 25px rgba(0,0,0,0.25);
-        }
+    #agent-button:hover {
+        transform: scale(1.05);
+        box-shadow: 0 6px 25px rgba(0,0,0,0.25);
+    }
 
-        #agent-button:active {
-            transform: scale(0.98);
-        }
+    #agent-button:active {
+        transform: scale(0.98);
+    }
 
-        /* Button pulse animation when closed */
-        #agent-button.pulse::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            border-radius: 50%;
-            background: ${config.primaryColor};
-            animation: pulse 2s infinite;
-            z-index: -1;
-        }
+    /* Button pulse animation when closed */
+    #agent-button.pulse::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        border-radius: 50%;
+        background: ${config.primaryColor};
+        animation: pulse 2s infinite;
+        z-index: -1;
+    }
 
-        @keyframes pulse {
-            0% { transform: scale(1); opacity: 1; }
-            100% { transform: scale(1.3); opacity: 0; }
-        }
+    @keyframes pulse {
+        0% { transform: scale(1); opacity: 1; }
+        100% { transform: scale(1.3); opacity: 0; }
+    }
 
-        /* Chat Panel */
+    /* Chat Panel */
+    #agent-panel {
+        position: absolute;
+        bottom: 80px;
+        right: 0;
+        width: 380px;
+        height: 550px;
+        background: white;
+        border-radius: 16px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+        transform: translateY(20px) scale(0.95);
+        opacity: 0;
+        visibility: hidden;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        border: 1px solid #e2e8f0;
+    }
+
+    #agent-panel.open {
+        transform: translateY(0) scale(1);
+        opacity: 1;
+        visibility: visible;
+    }
+
+    #agent-panel.minimized {
+        height: 60px;
+    }
+
+    /* Position adjustments for different corners */
+    #agent-widget[data-position="bottom-left"] #agent-panel {
+        right: auto;
+        left: 0;
+    }
+
+    #agent-widget[data-position="top-right"] #agent-panel {
+        bottom: auto;
+        top: 80px;
+    }
+
+    #agent-widget[data-position="top-left"] #agent-panel {
+        bottom: auto;
+        top: 80px;
+        right: auto;
+        left: 0;
+    }
+
+    /* Header */
+    #agent-header {
+        padding: 20px;
+        background: linear-gradient(135deg, ${config.primaryColor}, #1e40af);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+
+    #agent-header:hover {
+        background: linear-gradient(135deg, #1e40af, ${config.primaryColor});
+    }
+
+    .agent-agent-info {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .agent-avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: rgba(255,255,255,0.2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        font-weight: 600;
+        flex-shrink: 0;
+    }
+
+    .agent-agent-details h3 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+    }
+
+    .agent-status {
+        margin: 0;
+        font-size: 12px;
+        opacity: 0.9;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .agent-status::before {
+        content: '';
+        width: 8px;
+        height: 8px;
+        background: #10b981;
+        border-radius: 50%;
+        display: inline-block;
+    }
+
+    .agent-controls {
+        display: flex;
+        gap: 8px;
+    }
+
+    .agent-control-btn {
+        background: none;
+        border: none;
+        color: white;
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 4px;
+        width: 28px;
+        height: 28px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.2s;
+    }
+
+    #agent-close:hover {
+        background: rgba(255,255,255,0.2);
+    }
+
+    /* Messages */
+    #agent-messages {
+        flex: 1;
+        padding: 20px;
+        overflow-y: auto;
+        background: #f8fafc;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+    }
+
+    #agent-panel.minimized #agent-messages {
+        display: none;
+    }
+
+    .agent-message {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+    }
+
+    .agent-message.user {
+        flex-direction: row-reverse;
+    }
+
+    .agent-message-avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: 600;
+        flex-shrink: 0;
+    }
+
+    .agent-message.user .agent-message-avatar {
+        background: ${config.primaryColor};
+        color: white;
+    }
+
+    .agent-message.bot .agent-message-avatar {
+        background: #e5e7eb;
+        color: #6b7280;
+    }
+
+    .agent-message-content {
+        max-width: 75%;
+        padding: 12px 16px;
+        border-radius: 18px;
+        line-height: 1.4;
+        word-wrap: break-word;
+        position: relative;
+    }
+
+    .agent-message.user .agent-message-content {
+        background: ${config.primaryColor};
+        color: white;
+        border-bottom-right-radius: 4px;
+    }
+
+    .agent-message.bot .agent-message-content {
+        background: white;
+        color: #374151;
+        border: 1px solid #e5e7eb;
+        border-bottom-left-radius: 4px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+
+    .agent-timestamp {
+        font-size: 11px;
+        color: #9ca3af;
+        text-align: center;
+        margin-top: 4px;
+    }
+
+    /* Input Area */
+    #agent-input-area {
+        padding: 16px 20px 20px;
+        background: white;
+        border-top: 1px solid #e5e7eb;
+        flex-shrink: 0;
+    }
+
+    #agent-panel.minimized #agent-input-area {
+        display: none;
+    }
+
+    .agent-input-container {
+        position: relative;
+        display: flex;
+        align-items: flex-end;
+        gap: 8px;
+    }
+
+    #agent-input {
+        flex: 1;
+        padding: 12px 16px;
+        border: 1px solid #e5e7eb;
+        border-radius: 20px;
+        font-size: 14px;
+        outline: none;
+        resize: none;
+        font-family: inherit;
+        max-height: 100px;
+        min-height: 44px;
+        transition: border-color 0.2s;
+        background: #f9fafb;
+    }
+
+    #agent-input:focus {
+        border-color: ${config.primaryColor};
+        background: white;
+    }
+
+    #agent-input::placeholder {
+        color: #9ca3af;
+    }
+
+    #agent-send {
+        background: ${config.primaryColor};
+        border: none;
+        border-radius: 50%;
+        width: 44px;
+        height: 44px;
+        color: white;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        transition: all 0.2s;
+        flex-shrink: 0;
+    }
+
+    #agent-send:hover:not(:disabled) {
+        background: #1e40af;
+        transform: scale(1.05);
+    }
+
+    #agent-send:disabled {
+        background: #d1d5db;
+        cursor: not-allowed;
+        transform: none;
+    }
+
+    /* Typing Indicator */
+    .agent-typing {
+        display: flex;
+        gap: 4px;
+        padding: 12px 16px;
+        background: white;
+        border: 1px solid #e5e7eb;
+        border-radius: 18px;
+        border-bottom-left-radius: 4px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        width: fit-content;
+    }
+
+    .agent-typing-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #9ca3af;
+        animation: agent-typing 1.4s infinite ease-in-out;
+    }
+
+    .agent-typing-dot:nth-child(1) { animation-delay: -0.32s; }
+    .agent-typing-dot:nth-child(2) { animation-delay: -0.16s; }
+    .agent-typing-dot:nth-child(3) { animation-delay: 0s; }
+
+    @keyframes agent-typing {
+        0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+        40% { opacity: 1; transform: scale(1); }
+    }
+
+    /* Notification Badge */
+    .agent-notification {
+        position: absolute;
+        top: -8px;
+        right: -8px;
+        background: #ef4444;
+        color: white;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        font-size: 11px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 600;
+        animation: notification-bounce 0.5s ease-out;
+    }
+
+    @keyframes notification-bounce {
+        0% { transform: scale(0); }
+        50% { transform: scale(1.2); }
+        100% { transform: scale(1); }
+    }
+
+    /* Audio message controls */
+    .agent-audio-control {
+        background: none;
+        border: none;
+        color: #6b7280;
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 4px;
+        width: 28px;
+        height: 28px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s;
+    }
+
+    .agent-audio-control:hover {
+        color: ${config.primaryColor};
+        background: rgba(0,0,0,0.05);
+    }
+
+    .agent-audio-control.playing {
+        color: ${config.primaryColor};
+    }
+
+    /* Voice mode UI */
+    .agent-voice-mode {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 20px;
+        background: #f8fafc;
+        border-radius: 16px;
+        margin: 10px;
+    }
+
+    .agent-voice-btn {
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        background: ${config.primaryColor};
+        color: white;
+        border: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 24px;
+        margin: 10px;
+        transition: all 0.3s;
+    }
+
+    .agent-voice-btn:hover {
+        transform: scale(1.05);
+    }
+
+    .agent-voice-btn.listening {
+        background: #ef4444;
+        animation: pulse 1.5s infinite;
+    }
+
+    .agent-transcription {
+        margin-top: 10px;
+        color: #6b7280;
+        font-size: 14px;
+        text-align: center;
+    }
+
+    /* Voice mode toggle */
+    .agent-voice-toggle {
+        position: absolute;
+        right: 60px;
+        bottom: 20px;
+        background: ${config.primaryColor};
+        border: none;
+        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        color: white;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s;
+    }
+
+    .agent-voice-toggle:hover {
+        background: #1e40af;
+    }
+
+    .agent-voice-toggle.active {
+        background: #ef4444;
+    }
+
+    /* Mobile Responsive */
+    @media (max-width: 640px) {
         #agent-panel {
-            position: absolute;
-            bottom: 80px;
-            right: 0;
-            width: 380px;
-            height: 550px;
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-            transform: translateY(20px) scale(0.95);
-            opacity: 0;
-            visibility: hidden;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            border: 1px solid #e2e8f0;
+            width: calc(100vw - 40px);
+            right: 20px;
+            left: 20px;
+            max-width: 380px;
         }
 
-        #agent-panel.open {
-            transform: translateY(0) scale(1);
-            opacity: 1;
-            visibility: visible;
-        }
-
-        #agent-panel.minimized {
-            height: 60px;
-        }
-
-        /* Position adjustments for different corners */
         #agent-widget[data-position="bottom-left"] #agent-panel {
-            right: auto;
-            left: 0;
+            left: 20px;
+            right: 20px;
         }
 
-        #agent-widget[data-position="top-right"] #agent-panel {
-            bottom: auto;
-            top: 80px;
+        #agent-panel {
+            height: 500px;
         }
 
-        #agent-widget[data-position="top-left"] #agent-panel {
-            bottom: auto;
-            top: 80px;
-            right: auto;
-            left: 0;
-        }
-
-        /* Header */
         #agent-header {
-            padding: 20px;
-            background: linear-gradient(135deg, ${
-              config.primaryColor
-            }, #1e40af);
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            cursor: pointer;
-            flex-shrink: 0;
-        }
-
-        #agent-header:hover {
-            background: linear-gradient(135deg, #1e40af, ${
-              config.primaryColor
-            });
-        }
-
-        .agent-agent-info {
-            display: flex;
-            align-items: center;
-            gap: 12px;
+            padding: 16px;
         }
 
         .agent-avatar {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            background: rgba(255,255,255,0.2);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 16px;
-            font-weight: 600;
-            flex-shrink: 0;
+            width: 32px;
+            height: 32px;
+            font-size: 14px;
         }
 
         .agent-agent-details h3 {
-            margin: 0;
-            font-size: 16px;
-            font-weight: 600;
-        }
-
-        .agent-status {
-            margin: 0;
-            font-size: 12px;
-            opacity: 0.9;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-
-        .agent-status::before {
-            content: '';
-            width: 8px;
-            height: 8px;
-            background: #10b981;
-            border-radius: 50%;
-            display: inline-block;
-        }
-
-        .agent-controls {
-            display: flex;
-            gap: 8px;
-        }
-
-        .agent-control-btn {
-            background: none;
-            border: none;
-            color: white;
-            cursor: pointer;
-            padding: 4px;
-            border-radius: 4px;
-            width: 28px;
-            height: 28px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: background 0.2s;
-        }
-
-        #agent-close:hover {
-            background: rgba(255,255,255,0.2);
-        }
-
-        /* Messages */
-        #agent-messages {
-            flex: 1;
-            padding: 20px;
-            overflow-y: auto;
-            background: #f8fafc;
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-        }
-
-        #agent-panel.minimized #agent-messages {
-            display: none;
-        }
-
-        .agent-message {
-            display: flex;
-            gap: 12px;
-            align-items: flex-start;
-        }
-
-        .agent-message.user {
-            flex-direction: row-reverse;
-        }
-
-        .agent-message-avatar {
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 12px;
-            font-weight: 600;
-            flex-shrink: 0;
-        }
-
-        .agent-message.user .agent-message-avatar {
-            background: ${config.primaryColor};
-            color: white;
-        }
-
-        .agent-message.bot .agent-message-avatar {
-            background: #e5e7eb;
-            color: #6b7280;
-        }
-
-        .agent-message-content {
-            max-width: 75%;
-            padding: 12px 16px;
-            border-radius: 18px;
-            line-height: 1.4;
-            word-wrap: break-word;
-            position: relative;
-        }
-
-        .agent-message.user .agent-message-content {
-            background: ${config.primaryColor};
-            color: white;
-            border-bottom-right-radius: 4px;
-        }
-
-        .agent-message.bot .agent-message-content {
-            background: white;
-            color: #374151;
-            border: 1px solid #e5e7eb;
-            border-bottom-left-radius: 4px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-        }
-
-        .agent-timestamp {
-            font-size: 11px;
-            color: #9ca3af;
-            text-align: center;
-            margin-top: 4px;
-        }
-
-        /* Input Area */
-        #agent-input-area {
-            padding: 16px 20px 20px;
-            background: white;
-            border-top: 1px solid #e5e7eb;
-            flex-shrink: 0;
-        }
-
-        #agent-panel.minimized #agent-input-area {
-            display: none;
-        }
-
-        .agent-input-container {
-            position: relative;
-            display: flex;
-            align-items: flex-end;
-            gap: 8px;
-        }
-
-        #agent-input {
-            flex: 1;
-            padding: 12px 16px;
-            border: 1px solid #e5e7eb;
-            border-radius: 20px;
             font-size: 14px;
-            outline: none;
-            resize: none;
-            font-family: inherit;
-            max-height: 100px;
-            min-height: 44px;
-            transition: border-color 0.2s;
-            background: #f9fafb;
         }
 
-        #agent-input:focus {
-            border-color: ${config.primaryColor};
-            background: white;
+        #agent-messages {
+            padding: 16px;
         }
 
-        #agent-input::placeholder {
-            color: #9ca3af;
+        #agent-input-area {
+            padding: 12px 16px 16px;
         }
+    }
 
-        #agent-send {
-            background: ${config.primaryColor};
-            border: none;
-            border-radius: 50%;
-            width: 44px;
-            height: 44px;
-            color: white;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 18px;
-            transition: all 0.2s;
-            flex-shrink: 0;
+    /* High contrast mode support */
+    @media (prefers-contrast: high) {
+        #agent-panel {
+            border: 2px solid #000;
         }
-
-        #agent-send:hover:not(:disabled) {
-            background: #1e40af;
-            transform: scale(1.05);
+        
+        .agent-message.bot .agent-message-content {
+            border: 2px solid #374151;
         }
+    }
 
-        #agent-send:disabled {
-            background: #d1d5db;
-            cursor: not-allowed;
-            transform: none;
-        }
+    /* Scrollbar styling */
+    #agent-messages::-webkit-scrollbar {
+        width: 6px;
+    }
 
-        /* Typing Indicator */
-        .agent-typing {
-            display: flex;
-            gap: 4px;
-            padding: 12px 16px;
-            background: white;
-            border: 1px solid #e5e7eb;
-            border-radius: 18px;
-            border-bottom-left-radius: 4px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-            width: fit-content;
-        }
+    #agent-messages::-webkit-scrollbar-track {
+        background: transparent;
+    }
 
-        .agent-typing-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: #9ca3af;
-            animation: agent-typing 1.4s infinite ease-in-out;
-        }
+    #agent-messages::-webkit-scrollbar-thumb {
+        background: #d1d5db;
+        border-radius: 3px;
+    }
 
-        .agent-typing-dot:nth-child(1) { animation-delay: -0.32s; }
-        .agent-typing-dot:nth-child(2) { animation-delay: -0.16s; }
-        .agent-typing-dot:nth-child(3) { animation-delay: 0s; }
-
-        @keyframes agent-typing {
-            0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-            40% { opacity: 1; transform: scale(1); }
-        }
-
-        /* Notification Badge */
-        .agent-notification {
-            position: absolute;
-            top: -8px;
-            right: -8px;
-            background: #ef4444;
-            color: white;
-            border-radius: 50%;
-            width: 20px;
-            height: 20px;
-            font-size: 11px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 600;
-            animation: notification-bounce 0.5s ease-out;
-        }
-
-        @keyframes notification-bounce {
-            0% { transform: scale(0); }
-            50% { transform: scale(1.2); }
-            100% { transform: scale(1); }
-        }
-
-        /* Mobile Responsive */
-        @media (max-width: 640px) {
-            #agent-panel {
-                width: calc(100vw - 40px);
-                right: 20px;
-                left: 20px;
-                max-width: 380px;
-            }
-
-            #agent-widget[data-position="bottom-left"] #agent-panel {
-                left: 20px;
-                right: 20px;
-            }
-
-            #agent-panel {
-                height: 500px;
-            }
-
-            #agent-header {
-                padding: 16px;
-            }
-
-            .agent-avatar {
-                width: 32px;
-                height: 32px;
-                font-size: 14px;
-            }
-
-            .agent-agent-details h3 {
-                font-size: 14px;
-            }
-
-            #agent-messages {
-                padding: 16px;
-            }
-
-            #agent-input-area {
-                padding: 12px 16px 16px;
-            }
-        }
-
-        /* High contrast mode support */
-        @media (prefers-contrast: high) {
-            #agent-panel {
-                border: 2px solid #000;
-            }
-            
-            .agent-message.bot .agent-message-content {
-                border: 2px solid #374151;
-            }
-        }
-
-        /* Scrollbar styling */
-        #agent-messages::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        #agent-messages::-webkit-scrollbar-track {
-            background: transparent;
-        }
-
-        #agent-messages::-webkit-scrollbar-thumb {
-            background: #d1d5db;
-            border-radius: 3px;
-        }
-
-        #agent-messages::-webkit-scrollbar-thumb:hover {
-            background: #9ca3af;
-        }
-    `;
+    #agent-messages::-webkit-scrollbar-thumb:hover {
+        background: #9ca3af;
+    }
+  `;
   document.head.appendChild(style);
 
   // Create widget HTML
@@ -510,53 +686,83 @@
   widget.id = "agent-widget";
   widget.setAttribute("data-position", config.position);
   widget.innerHTML = `
-        <button id="agent-button" class="pulse">
-            ${config.buttonIcon}
-        </button>
-        
-        <div id="agent-panel">
-            <div id="agent-header">
-                <div class="agent-agent-info">
-                    <div class="agent-avatar">
-                    AI
-                    </div>
-                    <div class="agent-agent-details">
-                        <h3>${config.agentName}</h3>
-                        <p class="agent-status">Online</p>
-                    </div>
-                </div>
-                <div class="agent-controls">
-                    <button id="agent-minimize" class="agent-control-btn"></button>
-                    <button id="agent-close" class="agent-control-btn" title="Close">-</button>
-                </div>
-            </div>
-            
-            <div id="agent-messages">
-                <div class="agent-message bot">
-                    <div class="agent-message-avatar">AI</div>
-                    <div class="agent-message-content">
-                        ${
-                          config.greeting ||
-                          `Hi! I'm ${config.agentName}. How can I help you today?`
-                        }
-                        <div class="agent-timestamp">${new Date().toLocaleTimeString(
-                          [],
-                          { hour: "2-digit", minute: "2-digit" }
-                        )}</div>
-                    </div>
-                </div>
-            </div>
-            
-            <div id="agent-input-area">
-                <div class="agent-input-container">
-                    <textarea id="agent-input" placeholder="${
-                      config.placeholder
-                    }" rows="1"></textarea>
-                    <button id="agent-send">→</button>
-                </div>
-            </div>
+    <button id="agent-button" class="pulse">
+      ${config.buttonIcon}
+    </button>
+    
+    <div id="agent-panel">
+      <div id="agent-header">
+        <div class="agent-agent-info">
+          <div class="agent-avatar">
+            AI
+          </div>
+          <div class="agent-agent-details">
+            <h3>${config.agentName}</h3>
+            <p class="agent-status">Online</p>
+          </div>
         </div>
-    `;
+        <div class="agent-controls">
+          <button id="agent-minimize" class="agent-control-btn"></button>
+          <button id="agent-close" class="agent-control-btn" title="Close">-</button>
+        </div>
+      </div>
+      
+      <div id="agent-messages">
+        <div class="agent-message bot">
+          <div class="agent-message-avatar">AI</div>
+          <div class="agent-message-content">
+            ${
+              config.greeting ||
+              `Hi! I'm ${config.agentName}. How can I help you today?`
+            }
+            <div class="agent-timestamp">${new Date().toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}</div>
+          </div>
+        </div>
+      </div>
+      
+      <div id="agent-input-area">
+        <div class="agent-input-container">
+          <textarea id="agent-input" placeholder="${
+            config.placeholder
+          }" rows="1"></textarea>
+          <button id="agent-send">→</button>
+        </div>
+      </div>
+      
+      <div id="agent-voice-ui" style="display: none;">
+        <div class="agent-voice-mode">
+          <button id="agent-voice-btn" class="agent-voice-btn">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 1C10.3431 1 9 2.34315 9 4V12C9 13.6569 10.3431 15 12 15C13.6569 15 15 13.6569 15 12V4C15 2.34315 13.6569 1 12 1Z" fill="currentColor"/>
+              <path d="M5 11C5.55228 11 6 11.4477 6 12C6 15.3137 8.68629 18 12 18C15.3137 18 18 15.3137 18 12C18 11.4477 18.4477 11 19 11C19.5523 11 20 11.4477 20 12C20 16.4183 16.4183 20 12 20C7.58172 20 4 16.4183 4 12C4 11.4477 4.44772 11 5 11Z" fill="currentColor"/>
+              <path d="M12 19C12.5523 19 13 19.4477 13 20V23C13 23.5523 12.5523 24 12 24C11.4477 24 11 23.5523 11 23V20C11 19.4477 11.4477 19 12 19Z" fill="currentColor"/>
+            </svg>
+          </button>
+          <div id="agent-transcription" class="agent-transcription"></div>
+          <button id="agent-exit-voice" class="agent-control-btn" style="margin-top: 10px;">
+            Exit Voice Mode
+          </button>
+        </div>
+      </div>
+      
+      ${
+        config.enableVoice
+          ? `
+      <button id="agent-voice-toggle" class="agent-voice-toggle" title="Voice Mode">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 1C10.3431 1 9 2.34315 9 4V12C9 13.6569 10.3431 15 12 15C13.6569 15 15 13.6569 15 12V4C15 2.34315 13.6569 1 12 1Z" fill="currentColor"/>
+          <path d="M5 11C5.55228 11 6 11.4477 6 12C6 15.3137 8.68629 18 12 18C15.3137 18 18 15.3137 18 12C18 11.4477 18.4477 11 19 11C19.5523 11 20 11.4477 20 12C20 16.4183 16.4183 20 12 20C7.58172 20 4 16.4183 4 12C4 11.4477 4.44772 11 5 11Z" fill="currentColor"/>
+          <path d="M12 19C12.5523 19 13 19.4477 13 20V23C13 23.5523 12.5523 24 12 24C11.4477 24 11 23.5523 11 23V20C11 19.4477 11.4477 19 12 19Z" fill="currentColor"/>
+        </svg>
+      </button>
+      `
+          : ""
+      }
+    </div>
+  `;
 
   document.body.appendChild(widget);
 
@@ -569,11 +775,22 @@
   const input = document.getElementById("agent-input");
   const sendBtn = document.getElementById("agent-send");
   const messagesContainer = document.getElementById("agent-messages");
+  const voiceToggle = config.enableVoice
+    ? document.getElementById("agent-voice-toggle")
+    : null;
+  const voiceUI = document.getElementById("agent-voice-ui");
+  const voiceBtn = document.getElementById("agent-voice-btn");
+  const transcriptionEl = document.getElementById("agent-transcription");
+  const exitVoiceBtn = document.getElementById("agent-exit-voice");
 
   let isOpen = false;
   let isMinimized = false;
   let isLoading = false;
   let unreadCount = 0;
+  let isVoiceMode = false;
+  let isRecording = false;
+  let audioElements = {}; // To store audio elements for each message
+  let currentlyPlayingAudio = null;
 
   // Event listeners
   button.addEventListener("click", togglePanel);
@@ -589,6 +806,12 @@
       sendMessage();
     }
   });
+
+  if (config.enableVoice) {
+    voiceToggle.addEventListener("click", toggleVoiceMode);
+    voiceBtn.addEventListener("click", handleVoiceInput);
+    exitVoiceBtn.addEventListener("click", exitVoiceMode);
+  }
 
   // Auto-resize textarea
   input.addEventListener("input", function () {
@@ -608,14 +831,10 @@
     isOpen = true;
     panel.classList.add("open");
     button.classList.remove("pulse");
-    input.focus();
-    clearNotifications();
-
-    // Hide the demo indicator
-    const indicator = document.querySelector(".chat-indicator");
-    if (indicator) {
-      indicator.style.display = "none";
+    if (!isVoiceMode) {
+      input.focus();
     }
+    clearNotifications();
   }
 
   function closePanel() {
@@ -623,17 +842,18 @@
     isMinimized = false;
     panel.classList.remove("open", "minimized");
     button.classList.add("pulse");
+    exitVoiceMode();
   }
 
   function toggleMinimize() {
     isMinimized = !isMinimized;
     panel.classList.toggle("minimized", isMinimized);
-    if (!isMinimized) {
+    if (!isMinimized && !isVoiceMode) {
       input.focus();
     }
   }
 
-  function addMessage(content, isUser = false) {
+  function addMessage(content, isUser = false, audioUrl = null) {
     const messageDiv = document.createElement("div");
     messageDiv.className = `agent-message ${isUser ? "user" : "bot"}`;
 
@@ -644,20 +864,67 @@
 
     if (isUser) {
       messageDiv.innerHTML = `
-                <div class="agent-message-avatar">You</div>
-                <div class="agent-message-content">
-                    ${escapeHtml(content)}
-                    <div class="agent-timestamp">${timestamp}</div>
-                </div>
-            `;
+        <div class="agent-message-avatar">You</div>
+        <div class="agent-message-content">
+          ${escapeHtml(content)}
+          <div class="agent-timestamp">${timestamp}</div>
+        </div>
+      `;
     } else {
+      const audioControls = audioUrl
+        ? `
+        <button class="agent-audio-control" data-audio-id="${messagesContainer.children.length}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 5V19L19 12L8 5Z" fill="currentColor"/>
+          </svg>
+        </button>
+      `
+        : "";
+
       messageDiv.innerHTML = `
-                <div class="agent-message-avatar">AI</div>
-                <div class="agent-message-content">
-                    ${escapeHtml(content)}
-                    <div class="agent-timestamp">${timestamp}</div>
-                </div>
-            `;
+        <div class="agent-message-avatar">AI</div>
+        <div class="agent-message-content">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            ${audioControls}
+            <div>${escapeHtml(content)}</div>
+          </div>
+          <div class="agent-timestamp">${timestamp}</div>
+        </div>
+      `;
+
+      if (audioUrl) {
+        const audioId = messagesContainer.children.length;
+        audioElements[audioId] = new Audio(audioUrl);
+        audioElements[audioId].addEventListener("play", () => {
+          const btn = messageDiv.querySelector(".agent-audio-control");
+          if (btn) btn.classList.add("playing");
+          currentlyPlayingAudio = audioId;
+        });
+        audioElements[audioId].addEventListener("pause", () => {
+          const btn = messageDiv.querySelector(".agent-audio-control");
+          if (btn) btn.classList.remove("playing");
+          if (currentlyPlayingAudio === audioId) {
+            currentlyPlayingAudio = null;
+          }
+        });
+        audioElements[audioId].addEventListener("ended", () => {
+          const btn = messageDiv.querySelector(".agent-audio-control");
+          if (btn) btn.classList.remove("playing");
+          if (currentlyPlayingAudio === audioId) {
+            currentlyPlayingAudio = null;
+          }
+        });
+
+        // Add click handler for audio control
+        messageDiv
+          .querySelector(".agent-audio-control")
+          ?.addEventListener("click", (e) => {
+            const audioId = parseInt(
+              e.currentTarget.getAttribute("data-audio-id")
+            );
+            toggleAudio(audioId);
+          });
+      }
     }
 
     messagesContainer.appendChild(messageDiv);
@@ -671,17 +938,32 @@
     }
   }
 
+  function toggleAudio(audioId) {
+    if (currentlyPlayingAudio === audioId) {
+      // Pause currently playing audio
+      audioElements[audioId].pause();
+      currentlyPlayingAudio = null;
+    } else {
+      // Pause any currently playing audio
+      if (currentlyPlayingAudio !== null) {
+        audioElements[currentlyPlayingAudio].pause();
+      }
+      // Play the selected audio
+      audioElements[audioId].play();
+    }
+  }
+
   function showTypingIndicator() {
     const typingDiv = document.createElement("div");
     typingDiv.className = "agent-message bot agent-typing-message";
     typingDiv.innerHTML = `
-            <div class="agent-message-avatar">AI</div>
-            <div class="agent-typing">
-                <div class="agent-typing-dot"></div>
-                <div class="agent-typing-dot"></div>
-                <div class="agent-typing-dot"></div>
-            </div>
-        `;
+      <div class="agent-message-avatar">AI</div>
+      <div class="agent-typing">
+        <div class="agent-typing-dot"></div>
+        <div class="agent-typing-dot"></div>
+        <div class="agent-typing-dot"></div>
+      </div>
+    `;
     messagesContainer.appendChild(typingDiv);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
     return typingDiv;
@@ -720,14 +1002,68 @@
     return div.innerHTML;
   }
 
-  async function sendMessage() {
-    const message = input.value.trim();
-    if (!message || isLoading) return;
+  function toggleVoiceMode() {
+    if (!config.enableVoice) return;
+
+    isVoiceMode = !isVoiceMode;
+    voiceToggle.classList.toggle("active", isVoiceMode);
+
+    if (isVoiceMode) {
+      input.style.display = "none";
+      sendBtn.style.display = "none";
+      voiceUI.style.display = "block";
+    } else {
+      input.style.display = "";
+      sendBtn.style.display = "";
+      voiceUI.style.display = "none";
+      exitVoiceMode();
+    }
+  }
+
+  function exitVoiceMode() {
+    isRecording = false;
+    voiceBtn.classList.remove("listening");
+    voiceManager.stopListening();
+  }
+
+  function handleVoiceInput() {
+    if (!config.enableVoice) return;
+
+    if (isRecording) {
+      voiceManager.stopListening();
+      isRecording = false;
+      voiceBtn.classList.remove("listening");
+      return;
+    }
+
+    isRecording = true;
+    voiceBtn.classList.add("listening");
+    transcriptionEl.textContent = "Listening...";
+
+    voiceManager.startListening(
+      async (text) => {
+        transcriptionEl.textContent = text;
+        await sendMessage(text, true);
+      },
+      () => {
+        isRecording = false;
+        voiceBtn.classList.remove("listening");
+      }
+    );
+  }
+
+  async function sendMessage(message = null, isVoiceMessage = false) {
+    const text = message || input.value.trim();
+    if (!text || isLoading) return;
 
     // Add user message
-    addMessage(message, true);
-    input.value = "";
-    input.style.height = "auto";
+    addMessage(text, true);
+    if (!isVoiceMessage) {
+      input.value = "";
+      input.style.height = "auto";
+    } else {
+      transcriptionEl.textContent = "";
+    }
 
     // Show typing indicator
     const typingIndicator = showTypingIndicator();
@@ -737,9 +1073,9 @@
     try {
       // Create FormData for the API call
       const formData = new FormData();
-      formData.append("text", message);
+      formData.append("text", text);
       formData.append("userId", "widget-user-" + Date.now());
-      formData.append("voice_mode", "false");
+      formData.append("voice_mode", isVoiceMode.toString());
 
       const response = await fetch(agentChatUrl, {
         method: "POST",
@@ -754,9 +1090,18 @@
       const botResponse =
         data[0]?.text || "I'm sorry, I couldn't process your request.";
 
+      // Generate audio if in voice mode
+      let audioUrl = null;
+      if (isVoiceMode && config.enableVoice) {
+        audioUrl = await voiceManager.generateVoice(
+          botResponse,
+          config.voiceModel
+        );
+      }
+
       // Remove typing indicator and add bot response
       removeTypingIndicator(typingIndicator);
-      addMessage(botResponse);
+      addMessage(botResponse, false, audioUrl);
     } catch (error) {
       console.error("agent Widget Error:", error);
       removeTypingIndicator(typingIndicator);
@@ -766,7 +1111,7 @@
     } finally {
       isLoading = false;
       sendBtn.disabled = false;
-      if (isOpen && !isMinimized) {
+      if (isOpen && !isMinimized && !isVoiceMode) {
         input.focus();
       }
     }
