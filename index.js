@@ -1,18 +1,18 @@
 (function () {
   // Default configuration - can be overridden by window.aiChatConfig
   const defaultConfig = {
-    chatUrl:
-      "https://cyrene.us01.erebrus.io/b450db11-332b-0fc2-a144-92824a34f699/message",
+    chatUrl: "https://cyrene.us01.erebrus.io/b450db11-332b-0fc2-a144-92824a34f699/message",
     agentName: "Assistant",
     primaryColor: "#1366d9",
     position: "bottom-right",
+    size: "small", // New size parameter: small, medium, large
     greeting: null,
     placeholder: "Type your message...",
     buttonIcon: "💬",
     theme: "light",
     voiceModel: "af_bella", // Default voice model
     ttsApiUrl: "https://kokoro.cyreneai.com", // Default TTS API URL
-    enableVoice: true, // Enable voice features by default
+    enableVoice: true // Enable voice features by default
   };
 
   // Merge user config with defaults
@@ -26,11 +26,41 @@
     "top-left": "top: 20px; left: 20px;",
   };
 
+  // Size configurations
+  const sizeConfigs = {
+    "small": {
+      width: "380px",
+      height: "550px",
+      maxWidth: "380px",
+      mobileWidth: "calc(100vw - 40px)",
+      mobileHeight: "500px"
+    },
+    "medium": {
+      width: "25vw",
+      height: "60vh",
+      maxWidth: "600px",
+      minWidth: "400px",
+      mobileWidth: "calc(100vw - 40px)",
+      mobileHeight: "60vh"
+    },
+    "large": {
+      width: "50vw",
+      height: "80vh",
+      maxWidth: "800px",
+      minWidth: "500px",
+      mobileWidth: "calc(100vw - 40px)",
+      mobileHeight: "80vh"
+    }
+  };
+
+  // Get size configuration
+  const sizeConfig = sizeConfigs[config.size] || sizeConfigs["large"];
+
   // API endpoints
   const agentChatUrl = config.chatUrl;
   const agentInfoUrl = config.agentInfoUrl;
   const ttsApiUrl = config.ttsApiUrl;
-
+  
   let agentInfo;
   async function loadAgentInfo() {
     try {
@@ -52,9 +82,8 @@
     }
 
     initSpeechRecognition() {
-      if (typeof window !== "undefined") {
-        const SpeechRecognition =
-          window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (typeof window !== 'undefined') {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (SpeechRecognition) {
           const recognition = new SpeechRecognition();
           recognition.continuous = false;
@@ -67,14 +96,14 @@
 
     startListening(onResult, onEnd) {
       if (!this.recognition) {
-        console.error("Speech recognition not supported");
+        console.error('Speech recognition not supported');
         return;
       }
 
       if (this.isListening) return;
 
       this.isListening = true;
-
+      
       this.recognition.onresult = (event) => {
         const text = event.results[0][0].transcript;
         onResult(text);
@@ -97,27 +126,27 @@
     async generateVoice(text, voiceModel) {
       try {
         const response = await fetch(`${ttsApiUrl}/v1/audio/speech`, {
-          method: "POST",
+          method: 'POST',
           headers: {
-            "Content-Type": "application/json",
+            'Content-Type': 'application/json',
           },
           body: JSON.stringify({
             model: "kokoro",
             input: text,
             voice: voiceModel || config.voiceModel,
             response_format: "mp3",
-            speed: 1,
+            speed: 1
           }),
         });
 
         if (!response.ok) {
-          throw new Error("Failed to generate voice");
+          throw new Error('Failed to generate voice');
         }
-
+        
         const audioBlob = await response.blob();
         return URL.createObjectURL(audioBlob);
       } catch (error) {
-        console.error("Error generating voice:", error);
+        console.error('Error generating voice:', error);
         return null;
       }
     }
@@ -125,7 +154,7 @@
 
   const voiceManager = new VoiceManager();
 
-  // Inject CSS
+  // Inject CSS with dynamic sizing
   const style = document.createElement("style");
   style.textContent = `
     /* Widget Container */
@@ -183,13 +212,15 @@
         100% { transform: scale(1.3); opacity: 0; }
     }
 
-    /* Chat Panel */
+    /* Chat Panel with dynamic sizing */
     #agent-panel {
         position: absolute;
         bottom: 80px;
         right: 0;
-        width: 380px;
-        height: 550px;
+        width: ${sizeConfig.width};
+        height: ${sizeConfig.height};
+        ${sizeConfig.maxWidth ? `max-width: ${sizeConfig.maxWidth};` : ''}
+        ${sizeConfig.minWidth ? `min-width: ${sizeConfig.minWidth};` : ''}
         background: white;
         border-radius: 16px;
         box-shadow: 0 20px 60px rgba(0,0,0,0.2);
@@ -612,19 +643,17 @@
     /* Mobile Responsive */
     @media (max-width: 640px) {
         #agent-panel {
-            width: calc(100vw - 40px);
+            width: ${sizeConfig.mobileWidth};
+            height: ${sizeConfig.mobileHeight};
             right: 20px;
             left: 20px;
-            max-width: 380px;
+            max-width: none;
+            min-width: none;
         }
 
         #agent-widget[data-position="bottom-left"] #agent-panel {
             left: 20px;
             right: 20px;
-        }
-
-        #agent-panel {
-            height: 500px;
         }
 
         #agent-header {
@@ -647,6 +676,28 @@
 
         #agent-input-area {
             padding: 12px 16px 16px;
+        }
+    }
+
+    /* Extra small screens for large size */
+    @media (max-width: 480px) {
+        #agent-panel {
+            width: calc(100vw - 20px);
+            right: 10px;
+            left: 10px;
+        }
+
+        #agent-widget[data-position="bottom-left"] #agent-panel {
+            left: 10px;
+            right: 10px;
+        }
+    }
+
+    /* Large screens adjustments */
+    @media (min-width: 1200px) {
+        #agent-panel {
+            ${config.size === 'large' ? 'max-width: 900px;' : ''}
+            ${config.size === 'medium' ? 'max-width: 650px;' : ''}
         }
     }
 
@@ -685,6 +736,7 @@
   const widget = document.createElement("div");
   widget.id = "agent-widget";
   widget.setAttribute("data-position", config.position);
+  widget.setAttribute("data-size", config.size);
   widget.innerHTML = `
     <button id="agent-button" class="pulse">
       ${config.buttonIcon}
@@ -713,12 +765,12 @@
           <div class="agent-message-content">
             ${
               config.greeting ||
-              `Hi! I'm ${config.agentName}. How can I help you today?`
+              `How can I help you today?`
             }
-            <div class="agent-timestamp">${new Date().toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}</div>
+            <div class="agent-timestamp">${new Date().toLocaleTimeString(
+              [],
+              { hour: "2-digit", minute: "2-digit" }
+            )}</div>
           </div>
         </div>
       </div>
@@ -748,9 +800,7 @@
         </div>
       </div>
       
-      ${
-        config.enableVoice
-          ? `
+      ${config.enableVoice ? `
       <button id="agent-voice-toggle" class="agent-voice-toggle" title="Voice Mode">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M12 1C10.3431 1 9 2.34315 9 4V12C9 13.6569 10.3431 15 12 15C13.6569 15 15 13.6569 15 12V4C15 2.34315 13.6569 1 12 1Z" fill="currentColor"/>
@@ -758,9 +808,7 @@
           <path d="M12 19C12.5523 19 13 19.4477 13 20V23C13 23.5523 12.5523 24 12 24C11.4477 24 11 23.5523 11 23V20C11 19.4477 11.4477 19 12 19Z" fill="currentColor"/>
         </svg>
       </button>
-      `
-          : ""
-      }
+      ` : ''}
     </div>
   `;
 
@@ -775,9 +823,7 @@
   const input = document.getElementById("agent-input");
   const sendBtn = document.getElementById("agent-send");
   const messagesContainer = document.getElementById("agent-messages");
-  const voiceToggle = config.enableVoice
-    ? document.getElementById("agent-voice-toggle")
-    : null;
+  const voiceToggle = config.enableVoice ? document.getElementById("agent-voice-toggle") : null;
   const voiceUI = document.getElementById("agent-voice-ui");
   const voiceBtn = document.getElementById("agent-voice-btn");
   const transcriptionEl = document.getElementById("agent-transcription");
@@ -806,7 +852,7 @@
       sendMessage();
     }
   });
-
+  
   if (config.enableVoice) {
     voiceToggle.addEventListener("click", toggleVoiceMode);
     voiceBtn.addEventListener("click", handleVoiceInput);
@@ -871,15 +917,13 @@
         </div>
       `;
     } else {
-      const audioControls = audioUrl
-        ? `
+      const audioControls = audioUrl ? `
         <button class="agent-audio-control" data-audio-id="${messagesContainer.children.length}">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M8 5V19L19 12L8 5Z" fill="currentColor"/>
           </svg>
         </button>
-      `
-        : "";
+      ` : '';
 
       messageDiv.innerHTML = `
         <div class="agent-message-avatar">AI</div>
@@ -895,35 +939,46 @@
       if (audioUrl) {
         const audioId = messagesContainer.children.length;
         audioElements[audioId] = new Audio(audioUrl);
-        audioElements[audioId].addEventListener("play", () => {
-          const btn = messageDiv.querySelector(".agent-audio-control");
-          if (btn) btn.classList.add("playing");
+        audioElements[audioId].addEventListener('play', () => {
+          const btn = messageDiv.querySelector('.agent-audio-control');
+          if (btn) btn.classList.add('playing');
           currentlyPlayingAudio = audioId;
         });
-        audioElements[audioId].addEventListener("pause", () => {
-          const btn = messageDiv.querySelector(".agent-audio-control");
-          if (btn) btn.classList.remove("playing");
+        audioElements[audioId].addEventListener('pause', () => {
+          const btn = messageDiv.querySelector('.agent-audio-control');
+          if (btn) btn.classList.remove('playing');
           if (currentlyPlayingAudio === audioId) {
             currentlyPlayingAudio = null;
           }
         });
-        audioElements[audioId].addEventListener("ended", () => {
-          const btn = messageDiv.querySelector(".agent-audio-control");
-          if (btn) btn.classList.remove("playing");
+        audioElements[audioId].addEventListener('ended', () => {
+          const btn = messageDiv.querySelector('.agent-audio-control');
+          if (btn) btn.classList.remove('playing');
           if (currentlyPlayingAudio === audioId) {
             currentlyPlayingAudio = null;
           }
         });
 
         // Add click handler for audio control
-        messageDiv
-          .querySelector(".agent-audio-control")
-          ?.addEventListener("click", (e) => {
-            const audioId = parseInt(
-              e.currentTarget.getAttribute("data-audio-id")
-            );
-            toggleAudio(audioId);
-          });
+        messageDiv.querySelector('.agent-audio-control')?.addEventListener('click', (e) => {
+          const audioId = parseInt(e.currentTarget.getAttribute('data-audio-id'));
+          toggleAudio(audioId);
+        });
+
+        // Auto-play audio if in voice mode
+        if (isVoiceMode && !isUser) {
+          // Stop any currently playing audio first
+          if (currentlyPlayingAudio !== null && audioElements[currentlyPlayingAudio]) {
+            audioElements[currentlyPlayingAudio].pause();
+          }
+          
+          // Play the new audio automatically after a brief delay
+          setTimeout(() => {
+            audioElements[audioId].play().catch(error => {
+              console.warn('Auto-play failed:', error);
+            });
+          }, 100);
+        }
       }
     }
 
@@ -1004,42 +1059,50 @@
 
   function toggleVoiceMode() {
     if (!config.enableVoice) return;
-
+    
     isVoiceMode = !isVoiceMode;
-    voiceToggle.classList.toggle("active", isVoiceMode);
-
+    voiceToggle.classList.toggle('active', isVoiceMode);
+    
     if (isVoiceMode) {
-      input.style.display = "none";
-      sendBtn.style.display = "none";
-      voiceUI.style.display = "block";
+      input.style.display = 'none';
+      sendBtn.style.display = 'none';
+      voiceUI.style.display = 'block';
     } else {
-      input.style.display = "";
-      sendBtn.style.display = "";
-      voiceUI.style.display = "none";
+      input.style.display = '';
+      sendBtn.style.display = '';
+      voiceUI.style.display = 'none';
       exitVoiceMode();
     }
   }
 
   function exitVoiceMode() {
+    if (isVoiceMode) {
+      isVoiceMode = false;
+      voiceToggle.classList.remove('active');
+      input.style.display = '';
+      sendBtn.style.display = '';
+      voiceUI.style.display = 'none';
+    }
+    
     isRecording = false;
-    voiceBtn.classList.remove("listening");
+    voiceBtn.classList.remove('listening');
     voiceManager.stopListening();
   }
 
   function handleVoiceInput() {
     if (!config.enableVoice) return;
-
+    
     if (isRecording) {
       voiceManager.stopListening();
       isRecording = false;
-      voiceBtn.classList.remove("listening");
+      voiceBtn.classList.remove('listening');
       return;
     }
 
     isRecording = true;
-    voiceBtn.classList.add("listening");
-    transcriptionEl.textContent = "Listening...";
-
+    voiceBtn.classList.add('listening');
+    transcriptionEl.textContent = 'Listening...';
+    
     voiceManager.startListening(
       async (text) => {
         transcriptionEl.textContent = text;
@@ -1047,7 +1110,7 @@
       },
       () => {
         isRecording = false;
-        voiceBtn.classList.remove("listening");
+        voiceBtn.classList.remove('listening');
       }
     );
   }
@@ -1062,7 +1125,7 @@
       input.value = "";
       input.style.height = "auto";
     } else {
-      transcriptionEl.textContent = "";
+      transcriptionEl.textContent = '';
     }
 
     // Show typing indicator
@@ -1087,16 +1150,12 @@
       }
 
       const data = await response.json();
-      const botResponse =
-        data[0]?.text || "I'm sorry, I couldn't process your request.";
+      const botResponse = data[0]?.text || "I'm sorry, I couldn't process your request.";
 
       // Generate audio if in voice mode
       let audioUrl = null;
       if (isVoiceMode && config.enableVoice) {
-        audioUrl = await voiceManager.generateVoice(
-          botResponse,
-          config.voiceModel
-        );
+        audioUrl = await voiceManager.generateVoice(botResponse, config.voiceModel);
       }
 
       // Remove typing indicator and add bot response
